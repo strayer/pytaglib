@@ -5,6 +5,7 @@ NEXT
 - allow using `File` as a context manager, optionally saving on exit
 - new property `File.is_closed`
 - fix #94: Accept `os.PathLike` in constructor
+- add Python 3.11 to Github Actions workflow
 
 ### Breaking Changes:
 - `File.path` is now a `Path` object
