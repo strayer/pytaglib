@@ -1,0 +1,99 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  build_wheels:
+    name: Build wheels (${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.build }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      matrix:
+        include:
+          - {os: macos-11, arch: x86_64, build: "*"}
+          - {os: macos-11, arch: arm64, build: "*"}
+          - {os: windows-2019, arch: AMD64, build: "*"}
+          - {os: ubuntu-20.04, arch: x86_64, build: "*", taglib_cache_key: "x86_64"}
+          - {os: ubuntu-20.04, arch: aarch64, build: "*-manylinux*", taglib_cache_key: "aarch64-manylinux"}
+          - {os: ubuntu-20.04, arch: aarch64, build: "*-musllinux*", taglib_cache_key: "aarch64-musllinux"}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: all
+
+      - name: cache built taglib on windows
+        uses: actions/cache@v3
+        if: ${{ runner.os == 'Windows' }}
+        with:
+          path: taglib-install
+          # renew the cache when how taglib is built changes (e.g. version update)
+          key: taglib-install-windows-${{ hashFiles('build_taglib_windows.py') }}
+
+      - name: cache built taglib on macOS
+        uses: actions/cache@v3
+        if: ${{ runner.os == 'macOS' }}
+        with:
+          path: taglib-source
+          # renew the cache when how taglib is built changes (e.g. version update)
+          key: taglib-source-macos-${{ hashFiles('build_taglib_unix.sh') }}
+
+      - name: cache built taglib on Linux
+        uses: actions/cache@v3
+        if: ${{ runner.os == 'Linux' }}
+        with:
+          path: taglib-source
+          # renew the cache when how taglib is built changes (e.g. version update)
+          key: taglib-source-linux-${{ matrix.taglib_cache_key }}-${{ hashFiles('build_taglib_unix.sh') }}
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.11.2
+        env:
+          # skip pypy
+          CIBW_SKIP: pp*
+
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: ${{ matrix.build }}
+
+          CIBW_BEFORE_BUILD: pip install Cython
+          CIBW_BEFORE_ALL_LINUX: bash build_taglib_unix.sh
+          CIBW_BEFORE_ALL_WINDOWS: python build_taglib_windows.py --install-dest=taglib-install
+          CIBW_BEFORE_ALL_MACOS: bash build_taglib_unix.sh
+          CIBW_ENVIRONMENT: PYTAGLIB_CYTHONIZE=1
+          CIBW_ENVIRONMENT_WINDOWS: TAGLIB_HOME=taglib-install
+          CIBW_ENVIRONMENT_PASS_LINUX: PYTAGLIB_CYTHONIZE
+          CIBW_TEST_COMMAND: pytest {project}/tests
+          CIBW_TEST_REQUIRES: pytest
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: ./wheelhouse/*.whl
+
+  publish:
+    runs-on: ubuntu-20.04
+    needs: build_wheels
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+    steps:
+      - name: download package artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: dist
+          path: dist
+
+      - name: download package artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: wheels
+          path: wheelhouse
+
+      - name: publish package pypi.org
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip_existing: true
